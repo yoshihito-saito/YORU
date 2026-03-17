@@ -36,6 +36,13 @@ class init_asovi:
         self.m_dict["stream_MSS"] = self.conf["capture_style"]["stream_MSS"]
 
         # - Camera:
+        self.m_dict["camera_backend"] = self.conf["hardware"].get(
+            "camera_backend", "opencv"
+        )
+        self.m_dict["camera_serial"] = self.conf["hardware"].get("camera_serial", "")
+        self.m_dict["camera_pfs_path"] = self.conf["hardware"].get(
+            "camera_pfs_path", ""
+        )
         self.m_dict["camera_id"] = self.conf["hardware"]["camera_id"]
         self.m_dict["camera_width"] = self.conf["hardware"]["camera_width"]
         self.m_dict["camera_height"] = self.conf["hardware"]["camera_height"]

@@ -25,7 +25,12 @@ sys.path.append("../yoru")
 from yoru.libs.detection import yolo_detection
 from yoru.libs.drawing import yolo_drawing
 from yoru.libs.file_operation_realtime import file_dialog_tk
-from yoru.libs.imager import capture_streamCV2, capture_streamMSS, select_run
+from yoru.libs.imager import (
+    capture_streamCV2,
+    capture_streamMSS,
+    capture_streamPylon,
+    select_run,
+)
 from yoru.libs.init_realtime import init_asovi
 from yoru.libs.trigger import read_condition, yolo_trigger
 from yoru.libs.util import loadingParam
@@ -386,6 +391,20 @@ class camGUI:
     def logging(self):
         tf = dpg.get_value("streamingChkBox")
         if tf:  # streaming start
+            export_dir = str(self.m_dict.get("export", "")).strip()
+            if not export_dir:
+                print("Recording export folder is not set. Select a folder before enabling streaming.")
+                dpg.set_value("streamingChkBox", False)
+                self.m_dict["stream"] = False
+                return
+
+            export_dir = os.path.abspath(
+                os.path.expanduser(os.path.expandvars(export_dir))
+            )
+            os.makedirs(export_dir, exist_ok=True)
+            self.m_dict["export"] = export_dir
+            dpg.set_value("export_dir_path", export_dir)
+
             dt = datetime.datetime.now()
             fnhead = dpg.get_value("fileName")
             self.currentLogFileName = fnhead + dt.strftime("%Y%m%d-%H%M%S_%f")
@@ -401,10 +420,12 @@ class camGUI:
             self.m_dict["stream"] = tf
         else:
             self.m_dict["stream"] = tf
-            ret = shutil.copyfile(
-                self.config_name,
-                self.m_dict["export"] + "/" + self.currentLogFileName + ".yaml",
-            )
+            export_dir = str(self.m_dict.get("export", "")).strip()
+            if export_dir and hasattr(self, "currentLogFileName"):
+                ret = shutil.copyfile(
+                    self.config_name,
+                    os.path.join(export_dir, self.currentLogFileName + ".yaml"),
+                )
             # print("Saved config: ", ret)
             # self.currentLogFile.close()
 
@@ -434,7 +455,11 @@ def main(confFileName):
             SR.main()
             imgWin = capture_streamMSS(m_dict=d)
         else:
-            imgWin = capture_streamCV2(srcCam=d["camera_id"], m_dict=d)
+            camera_backend = str(d.get("camera_backend", "opencv")).lower()
+            if camera_backend == "pypylon":
+                imgWin = capture_streamPylon(srcCam=d["camera_id"], m_dict=d)
+            else:
+                imgWin = capture_streamCV2(srcCam=d["camera_id"], m_dict=d)
 
         gui = camGUI(config_file=confFileName, m_dict=d)
         yolo_det = yolo_detection(m_dict=d)
@@ -468,7 +493,12 @@ def main(confFileName):
 
 
 if __name__ == "__main__":
-    confFileName = "C:/Users/nokai/Desktop/yoru_default.yaml"
+    # Use pypylon config by default, or let user select
+    import os
+    config_path = "config/yoru_pypylon_test.yaml"
+    if not os.path.exists(config_path):
+        config_path = "config/yoru_default.yaml"
+    confFileName = config_path
     main(confFileName)
 
     # with Manager() as manager:

@@ -12,6 +12,13 @@ sys.path.append("../yoru")
 import yoru.libs.arduino as ard
 
 
+SERIAL_ONLY_TRIGGER_PLUGINS = {
+    "straight",
+    "standard_serial",
+    "standard_serial_array",
+}
+
+
 class yolo_trigger:
     def __init__(self, m_dict={}):
         print("== Trigger Start ==")
@@ -39,6 +46,7 @@ class yolo_trigger:
             # continue
             except Exception as e:  # 具体的なエラーメッセージを出力
                 print(f"Error: {e}")
+                time.sleep(1)
                 continue
 
             self.process_triggers()
@@ -69,9 +77,17 @@ class trigger_python:
         self.com = self.m_dict["arduino_com"]
         self.pin = self.m_dict["pin"]
         self.myArduino = None  # 初期化
+        self.trigger_instance = None
         # self.ser_baudrate = int(self.m_dict.get("baudrate", 9600))
 
-        if self.com and self.com != "None":
+        self.plugin_key = self.m_dict.get("in_plugin_name", "")
+        self.m_dict["plugin_name"] = "trigger_plugins." + self.plugin_key
+
+        if (
+            self.com
+            and self.com != "None"
+            and self.plugin_key not in SERIAL_ONLY_TRIGGER_PLUGINS
+        ):
             try:
                 self.myArduino = ard.dio(comport=self.com, doCh_IDs=[self.pin])
             except PermissionError as e:
@@ -79,15 +95,20 @@ class trigger_python:
                 if self.myArduino:
                     self.myArduino.close()        # ard.dio の close メソッド
                 self.myArduino = None
-            
         else:
             self.myArduino = None
 
         self.tri_class = self.m_dict.get("trigger_class")
-        self.m_dict["plugin_name"] = "trigger_plugins." + self.m_dict.get(
-            "in_plugin_name", ""
-        )
-        self.trigger_instance = self._load_plugin()
+        try:
+            self.trigger_instance = self._load_plugin()
+        except Exception:
+            if self.myArduino:
+                try:
+                    self.myArduino.writeDO_all(0)
+                finally:
+                    self.myArduino.close()
+                    self.myArduino = None
+            raise
 
         print("Open Port")
 
@@ -109,6 +130,12 @@ class trigger_python:
         # print("trigger_command")
 
     def close(self):
+        if self.trigger_instance and hasattr(self.trigger_instance, "close"):
+            try:
+                self.trigger_instance.close()
+            except Exception:
+                pass
+
         if self.myArduino:
 
             try:
@@ -117,7 +144,7 @@ class trigger_python:
             finally:
                 self.myArduino.close()
                 print("Arduino connection closed.")
-            self.trigger_instance = None
+        self.trigger_instance = None
         print("Trigger instance set to None.")
 
 

@@ -181,4 +181,11 @@ custom_layout_analysis.ini
 custom_layout_evaluater_gui.ini
 desktop.ini
 
+# Test folders
+tests/
+test_camera/
+test_data/
+test_output/
+YORU-Training-Folder/
+camera_test/
 others/

@@ -39,4 +39,5 @@ dependencies:
       - PyOpenGL_accelerate==3.1.7
       - pyserial==3.5
       - pywin32==306
+      - pypylon
       - pytest==7.4.0

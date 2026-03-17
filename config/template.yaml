@@ -20,6 +20,9 @@ trigger:
  
 hardware:
  use_camera: True  # Specify whether to use the camera
+ camera_backend: opencv  # "opencv" for webcam-style devices, "pypylon" for Basler cameras.
+ camera_serial: ""  # Optional Basler serial number. Leave blank to use camera_id as the device index.
+ camera_pfs_path: ""  # Optional Basler .pfs feature file to load at startup when using pypylon.
  camera_id: 0  # Specifying the camera ID
  camera_width: 640  # Specify the width (px) of images captured by the camera.
  camera_height: 480  # Specifying the height (px) of images captured by the camera

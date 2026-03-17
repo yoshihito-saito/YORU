@@ -26,6 +26,8 @@ class file_dialog_tk:
         root.withdraw()
         file_path = filedialog.askdirectory()
         root.destroy()
+        if not file_path:
+            return
         dpg.set_value("export_dir_path", file_path)
         self.m_dict["export"] = file_path
 

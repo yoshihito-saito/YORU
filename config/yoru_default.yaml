@@ -24,6 +24,9 @@ trigger:
  
 hardware:
  use_camera: True
+ camera_backend: opencv
+ camera_serial: ""
+  camera_pfs_path: ""
  camera_id: 0
  camera_width: 640
  camera_height: 480
