@@ -43,6 +43,9 @@ class init_asovi:
         self.m_dict["camera_pfs_path"] = self.conf["hardware"].get(
             "camera_pfs_path", ""
         )
+        self.m_dict["camera_pfs_reload_requested"] = False
+        self.m_dict["camera_pfs_status"] = "No .pfs file selected"
+        self.m_dict["camera_pfs_last_loaded"] = ""
         self.m_dict["camera_id"] = self.conf["hardware"]["camera_id"]
         self.m_dict["camera_width"] = self.conf["hardware"]["camera_width"]
         self.m_dict["camera_height"] = self.conf["hardware"]["camera_height"]

@@ -28,7 +28,7 @@ hardware:
   use_camera: True
   camera_backend: pypylon      # Use Basler pypylon camera
   camera_serial: ""           # Leave empty for auto-detect
-  camera_pfs_path: "C:\\Users\\Cornell\\Documents\\GitHub\\YORU\\test_camera\\Camera_setting_40Hz.pfs"  # Optional .pfs file exported from pylon Viewer
+  camera_pfs_path: ""         # Optional .pfs file exported from pylon Viewer
   camera_id: 0                  # Camera index (0 = first camera)
   camera_width: 680             # Resolution width
   camera_height: 480            # Resolution height

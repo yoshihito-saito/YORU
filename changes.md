@@ -14,6 +14,23 @@
 
 - Added optional `.pfs` loading support via `camera_pfs_path`.
 - `capture_streamPylon.startCapture()` now loads the `.pfs` after opening the camera and before grabbing starts.
+- Added GUI support for Basler `.pfs` selection and apply:
+  - `yoru/libs/file_operation_realtime.py` now includes a `.pfs` file picker
+  - `yoru/realtime_yoru_GUI.py` shows Basler-only controls for:
+    - current `camera_pfs_path`
+    - `Select .pfs`
+    - `Apply .pfs`
+    - live status text
+  - the running pypylon capture loop can now reload `.pfs` settings on request without restarting the whole GUI
+- Added shared runtime state in `yoru/libs/init_realtime.py` for:
+  - `camera_pfs_reload_requested`
+  - `camera_pfs_status`
+  - `camera_pfs_last_loaded`
+- `capture_streamPylon` now tracks `.pfs` apply status and reports:
+  - no file selected
+  - file not found
+  - successful load
+  - apply/restart failures
 - Added `camera_pfs_path` to:
   - `config/template.yaml`
   - `config/yoru_default.yaml`
@@ -57,6 +74,18 @@
   - `AcquisitionFrameRateAbs`
 - The value is also stored in `m_dict["camera_acquisition_fps"]`.
 - This was added because the GUI FPS bar reflects YORU loop throughput, not necessarily the camera's true acquisition rate.
+- Basler frame-rate writes now also try `AcquisitionFrameRateAbs` when `AcquisitionFrameRate` is unavailable.
+- The startup log now prints which frame-rate node accepted the requested `camera_fps`, if any.
+
+## Realtime GUI / startup fixes
+
+- Fixed `config/yoru_default.yaml` so it parses correctly as YAML again.
+- Updated `config/yoru_pypylon_test.yaml` so the sample `.pfs` path is blank by default instead of pointing to a machine-specific local path.
+- `yoru/realtime_yoru_GUI.py` now supports `-c` / `--config` when launched directly.
+- `run_gui_pypylon.bat` now:
+  - starts from the repository directory
+  - passes `--config config/yoru_pypylon_test.yaml`
+  - avoids relying on a hard-coded user-specific conda activation path
 
 ## Test updates
 

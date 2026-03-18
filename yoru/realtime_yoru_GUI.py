@@ -1,4 +1,5 @@
 import datetime
+import argparse
 import os
 import re
 import shutil
@@ -91,6 +92,9 @@ class camGUI:
 
         frame = self.m_dict["current_camera_frame"]
         self.frameSize = np.shape(frame)
+        self.is_pypylon_backend = (
+            str(self.m_dict.get("camera_backend", "opencv")).lower() == "pypylon"
+        )
         print(self.frameSize)
 
         # imager-window
@@ -204,6 +208,33 @@ class camGUI:
                 tag="yolocheckbox",
                 callback=lambda: self.yolo_condition(),
             )
+            if self.is_pypylon_backend:
+                dpg.add_separator()
+                dpg.add_text(default_value="Basler Camera")
+                with dpg.group(horizontal=True):
+                    dpg.add_input_text(
+                        tag="camera_pfs_path",
+                        readonly=True,
+                        default_value=self.m_dict.get("camera_pfs_path", ""),
+                        width=320,
+                    )
+                    dpg.add_button(
+                        label="Select .pfs",
+                        callback=lambda: self.fd_tk.open_pfs_file(),
+                        enabled=True,
+                    )
+                with dpg.group(horizontal=True):
+                    dpg.add_button(
+                        label="Apply .pfs",
+                        callback=lambda: self.apply_camera_pfs(),
+                        enabled=True,
+                    )
+                    dpg.add_text(
+                        default_value=self.m_dict.get(
+                            "camera_pfs_status", "No .pfs file selected"
+                        ),
+                        tag="camera_pfs_status",
+                    )
 
             dpg.add_separator()
             dpg.add_text(default_value="Trigger")
@@ -273,6 +304,11 @@ class camGUI:
 
             # YOLO detection
             dpg.set_value("imwin_tag1", self.yolo_frame_to_data())
+            if self.is_pypylon_backend and dpg.does_item_exist("camera_pfs_status"):
+                dpg.set_value(
+                    "camera_pfs_status",
+                    self.m_dict.get("camera_pfs_status", "No .pfs file selected"),
+                )
 
     def frame_to_data(self):
         # raw image streaming
@@ -347,6 +383,20 @@ class camGUI:
     def yolo_condition(self):
         tf = dpg.get_value("yolocheckbox")
         self.m_dict["yolo_detection"] = tf
+
+    def apply_camera_pfs(self):
+        if not self.is_pypylon_backend:
+            return
+        pfs_path = str(self.m_dict.get("camera_pfs_path", "")).strip()
+        if not pfs_path:
+            self.m_dict["camera_pfs_status"] = "Select a .pfs file before applying"
+            if dpg.does_item_exist("camera_pfs_status"):
+                dpg.set_value("camera_pfs_status", self.m_dict["camera_pfs_status"])
+            return
+        self.m_dict["camera_pfs_status"] = "Applying .pfs to Basler camera..."
+        self.m_dict["camera_pfs_reload_requested"] = True
+        if dpg.does_item_exist("camera_pfs_status"):
+            dpg.set_value("camera_pfs_status", self.m_dict["camera_pfs_status"])
 
     def trigger_condition(self):
         tf = dpg.get_value("trigger_checkbox")
@@ -492,14 +542,29 @@ def main(confFileName):
         print(d)
 
 
+def _default_config_path():
+    for path in ("config/yoru_pypylon_test.yaml", "config/yoru_default.yaml"):
+        if os.path.exists(path):
+            return path
+    return "config/yoru_default.yaml"
+
+
+def _build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description="Launch the YORU realtime GUI with an optional config file."
+    )
+    parser.add_argument(
+        "-c",
+        "--config",
+        default=_default_config_path(),
+        help="Condition YAML to load at startup.",
+    )
+    return parser
+
+
 if __name__ == "__main__":
-    # Use pypylon config by default, or let user select
-    import os
-    config_path = "config/yoru_pypylon_test.yaml"
-    if not os.path.exists(config_path):
-        config_path = "config/yoru_default.yaml"
-    confFileName = config_path
-    main(confFileName)
+    args = _build_arg_parser().parse_args()
+    main(args.config)
 
     # with Manager() as manager:
     #     d = manager.dict()

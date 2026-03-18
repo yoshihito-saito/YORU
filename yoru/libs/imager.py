@@ -301,6 +301,11 @@ class capture_streamPylon:
         self.detectionlogfile = None
         print("Pylon-initialization Finished")
 
+    def _configure_converter(self):
+        self.converter = pylon.ImageFormatConverter()
+        self.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+        self.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+
     def _select_device(self):
         factory = pylon.TlFactory.GetInstance()
         devices = factory.EnumerateDevices()
@@ -338,21 +343,28 @@ class capture_streamPylon:
     def _load_pfs_configuration(self):
         pfs_path = str(self.m_dict.get("camera_pfs_path", "")).strip()
         if not pfs_path:
+            self.m_dict["camera_pfs_status"] = "No .pfs file selected"
+            self.m_dict["camera_pfs_last_loaded"] = ""
             return
 
         pfs_path = os.path.abspath(os.path.expanduser(os.path.expandvars(pfs_path)))
         if not os.path.isfile(pfs_path):
+            self.m_dict["camera_pfs_status"] = f".pfs not found: {pfs_path}"
             raise FileNotFoundError(
                 f"Configured Basler .pfs file was not found: {pfs_path}"
             )
 
         feature_persistence = getattr(pylon, "FeaturePersistence", None)
         if feature_persistence is None:
+            self.m_dict["camera_pfs_status"] = "pypylon FeaturePersistence unavailable"
             raise RuntimeError(
                 "pypylon does not expose FeaturePersistence; cannot load Basler .pfs settings."
             )
 
         feature_persistence.Load(pfs_path, self.capture.GetNodeMap(), True)
+        self.m_dict["camera_pfs_path"] = pfs_path
+        self.m_dict["camera_pfs_last_loaded"] = pfs_path
+        self.m_dict["camera_pfs_status"] = f"Loaded .pfs: {os.path.basename(pfs_path)}"
 
     def _read_camera_acquisition_rate(self):
         rate_nodes = (
@@ -374,50 +386,97 @@ class capture_streamPylon:
         self.m_dict["camera_acquisition_fps"] = None
         return None, None
 
+    def _set_camera_frame_rate(self):
+        target_fps = float(self.m_dict["camera_fps"])
+
+        try:
+            rate_enable = getattr(self.capture, "AcquisitionFrameRateEnable", None)
+            if rate_enable is not None:
+                rate_enable.SetValue(True)
+        except Exception:
+            pass
+
+        for node_name in ("AcquisitionFrameRate", "AcquisitionFrameRateAbs"):
+            try:
+                node = getattr(self.capture, node_name, None)
+                if node is None:
+                    continue
+                node.SetValue(target_fps)
+                return node_name
+            except Exception:
+                continue
+
+        return None
+
+    def _apply_camera_geometry(self):
+        # Keep YORU's output resolution contract even if a .pfs changes sensor settings.
+        try:
+            self.capture.Width.SetValue(
+                min(self.capture.Width.Max, int(self.m_dict["camera_width"]))
+            )
+        except Exception:
+            pass
+
+        try:
+            self.capture.Height.SetValue(
+                min(self.capture.Height.Max, int(self.m_dict["camera_height"]))
+            )
+        except Exception:
+            pass
+
+    def _reload_pfs_if_requested(self):
+        if not self.m_dict.get("camera_pfs_reload_requested", False):
+            return
+
+        self.m_dict["camera_pfs_reload_requested"] = False
+        if not str(self.m_dict.get("camera_pfs_path", "")).strip():
+            self.m_dict["camera_pfs_status"] = "Select a .pfs file before applying"
+            return
+
+        was_grabbing = self.capture is not None and self.capture.IsGrabbing()
+        try:
+            if was_grabbing:
+                self.capture.StopGrabbing()
+
+            self._load_pfs_configuration()
+            self._apply_camera_geometry()
+            self._set_camera_frame_rate()
+            self._configure_converter()
+            print(f"Applied Basler .pfs: {self.m_dict['camera_pfs_last_loaded']}")
+        except Exception as exc:
+            self.m_dict["camera_pfs_status"] = f"Failed to apply .pfs: {exc}"
+            print(self.m_dict["camera_pfs_status"])
+        finally:
+            if was_grabbing and self.capture is not None and not self.capture.IsGrabbing():
+                try:
+                    self.capture.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+                except Exception as exc:
+                    self.m_dict["camera_pfs_status"] = (
+                        f"Camera restart failed after .pfs apply: {exc}"
+                    )
+                    print(self.m_dict["camera_pfs_status"])
+
     def startCapture(self):
         print("Pylon-capture start...")
         self.capture = pylon.InstantCamera(self._select_device())
         self.capture.Open()
         self._load_pfs_configuration()
 
-        # Set width
-        try:
-            self.capture.Width.SetValue(
-                min(self.capture.Width.Max, int(self.m_dict["camera_width"]))
-            )
-        except Exception:
-            pass  # Property may not be writable
-        
-        # Set height
-        try:
-            self.capture.Height.SetValue(
-                min(self.capture.Height.Max, int(self.m_dict["camera_height"]))
-            )
-        except Exception:
-            pass  # Property may not be writable
-        
-        # Enable and set frame rate if available
-        try:
-            if hasattr(self.capture, "AcquisitionFrameRateEnable"):
-                self.capture.AcquisitionFrameRateEnable.SetValue(True)
-        except Exception:
-            pass
-        
-        try:
-            if hasattr(self.capture, "AcquisitionFrameRate"):
-                self.capture.AcquisitionFrameRate.SetValue(
-                    float(self.m_dict["camera_fps"])
-                )
-        except Exception:
-            pass
+        self._apply_camera_geometry()
+        frame_rate_node = self._set_camera_frame_rate()
 
-        self.converter = pylon.ImageFormatConverter()
-        self.converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-        self.converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+        self._configure_converter()
 
         self.capture.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
         frame = self._grab_frame()
         _resize_frame(frame, self.resized_resolution)
+        if frame_rate_node is not None:
+            print(
+                f"Basler frame-rate target requested via {frame_rate_node}: "
+                f"{float(self.m_dict['camera_fps']):.2f} fps"
+            )
+        else:
+            print("Basler frame-rate target could not be set from camera_fps")
         acquisition_fps, acquisition_node = self._read_camera_acquisition_rate()
         if acquisition_fps is not None:
             print(
@@ -445,6 +504,8 @@ class capture_streamPylon:
                 _stop_recording_session(self)
                 print(self.curVidName)
                 print("Finished: Video-streaming")
+
+            self._reload_pfs_if_requested()
 
             if self.capture is not None and self.capture.IsGrabbing():
                 frame = self._grab_frame()

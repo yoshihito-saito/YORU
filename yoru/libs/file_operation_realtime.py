@@ -21,6 +21,20 @@ class file_dialog_tk:
         dpg.set_value("File Path", file_path)
         self.m_dict["yolo_model"] = file_path
 
+    def open_pfs_file(self):
+        root = tkinter.Tk()
+        root.withdraw()
+        file_path = filedialog.askopenfilename(
+            title="select Basler camera settings",
+            filetypes=[("Basler camera settings", ".pfs")],
+            initialdir="./",
+        )
+        root.destroy()
+        if not file_path:
+            return
+        dpg.set_value("camera_pfs_path", file_path)
+        self.m_dict["camera_pfs_path"] = file_path
+
     def Out_dir_open(self):
         root = tkinter.Tk()
         root.withdraw()
