@@ -23,9 +23,9 @@ hardware:
  camera_backend: opencv  # "opencv" for webcam-style devices, "pypylon" for Basler cameras.
  camera_serial: ""  # Optional Basler serial number. Leave blank to use camera_id as the device index.
  camera_pfs_path: ""  # Optional Basler .pfs feature file to load at startup when using pypylon.
- camera_id: 0  # Specifying the camera ID
- camera_width: 640  # Specify the width (px) of images captured by the camera.
- camera_height: 480  # Specifying the height (px) of images captured by the camera
- camera_scale: 1  # If you want to change the scale of the camera image, change this setting.
+  camera_id: 0  # Specifying the camera ID
+ camera_width: 640  # Optional. If omitted for Basler+pypylon, width is taken from the .pfs file.
+ camera_height: 480  # Optional. If omitted for Basler+pypylon, height is taken from the .pfs file.
+ camera_scale: 1  # Downscale factor for live YORU processing. Saved video stays at camera_width/camera_height.
  camera_fps: 30 # Specifying camera fps
  camera_imshow: False # When set to True, the opencv window opens.

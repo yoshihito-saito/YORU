@@ -32,7 +32,45 @@ def _ensure_three_channel_bgr(frame):
     return frame
 
 
+def _compute_processing_resolution(width, height, scale):
+    width = max(1, int(width))
+    height = max(1, int(height))
+    try:
+        scale = float(scale)
+    except (TypeError, ValueError):
+        scale = 1.0
+
+    if scale <= 1.0:
+        return (width, height)
+
+    return (
+        max(1, int(round(width / scale))),
+        max(1, int(round(height / scale))),
+    )
+
+
+def _resolve_recording_resolution(m_dict):
+    width = m_dict.get("recording_width", m_dict["camera_width"])
+    height = m_dict.get("recording_height", m_dict["camera_height"])
+    return max(1, int(width)), max(1, int(height))
+
+
+def _resolve_processing_resolution(m_dict):
+    processing_width = m_dict.get("processing_width")
+    processing_height = m_dict.get("processing_height")
+    if processing_width is not None and processing_height is not None:
+        return max(1, int(processing_width)), max(1, int(processing_height))
+
+    recording_width, recording_height = _resolve_recording_resolution(m_dict)
+    return _compute_processing_resolution(
+        recording_width,
+        recording_height,
+        m_dict.get("camera_scale", 1),
+    )
+
+
 _RECORDING_STOP = object()
+_VIDEO_CODEC_CANDIDATES = ("MJPG", "XVID", "DIVX", "mp4v")
 
 
 class _QueuedVideoWriter:
@@ -40,9 +78,37 @@ class _QueuedVideoWriter:
         self.error = None
         self.closed = False
         self.queue = queue.Queue()
-        self.writer = cv2.VideoWriter(filename, fourcc, fps, frame_size, is_color)
-        if not self.writer.isOpened():
-            raise RuntimeError(f"Failed to open video writer for {filename}")
+        self.frame_size = (int(frame_size[0]), int(frame_size[1]))
+        self.codec_name = None
+        self.writer = None
+
+        if isinstance(fourcc, (list, tuple)):
+            codec_candidates = tuple(fourcc)
+        else:
+            codec_candidates = (fourcc,)
+
+        for codec in codec_candidates:
+            if isinstance(codec, str):
+                writer_fourcc = cv2.VideoWriter_fourcc(*codec)
+                codec_name = codec
+            else:
+                writer_fourcc = codec
+                codec_name = str(codec)
+
+            writer = cv2.VideoWriter(
+                filename, writer_fourcc, fps, self.frame_size, is_color
+            )
+            if writer.isOpened():
+                self.writer = writer
+                self.codec_name = codec_name
+                break
+            writer.release()
+
+        if self.writer is None:
+            raise RuntimeError(
+                f"Failed to open video writer for {filename} "
+                f"with codecs: {codec_candidates}"
+            )
 
         self.thread = Thread(target=self._drain_queue, daemon=True)
         self.thread.start()
@@ -64,6 +130,14 @@ class _QueuedVideoWriter:
             raise RuntimeError("Cannot write to a closed video recorder.")
         if self.error is not None:
             raise RuntimeError("Video recorder thread failed.") from self.error
+        if frame is None:
+            raise RuntimeError("Cannot write an empty frame to the video recorder.")
+        actual_size = (int(frame.shape[1]), int(frame.shape[0]))
+        if actual_size != self.frame_size:
+            raise RuntimeError(
+                "Video frame size does not match recorder size. "
+                f"expected={self.frame_size}, actual={actual_size}"
+            )
         self.queue.put(frame.copy())
 
     def close(self):
@@ -92,9 +166,14 @@ def _start_recording_session(owner):
         owner.vwriter = _QueuedVideoWriter(
             owner.curVidName,
             owner.fmt,
-            owner.m_dict["camera_fps"],
-            owner.resized_resolution,
+            owner.m_dict.get("camera_target_fps", owner.m_dict["camera_fps"]),
+            owner.recording_resolution,
             1,
+        )
+        print(
+            f"Recording video to {owner.curVidName} "
+            f"using codec {owner.vwriter.codec_name} "
+            f"at {owner.recording_resolution[0]}x{owner.recording_resolution[1]}"
         )
 
         owner.LogFile = open(file_name_base + "_log.csv", "a+", newline="")
@@ -144,24 +223,37 @@ def _stop_recording_session(owner):
         raise close_error
 
 
+def _update_loop_fps(m_dict, t0, t1):
+    dt = max(t1 - t0, 1e-9)
+    loop_fps = 1.0 / dt
+    m_dict["camera_loop_fps"] = loop_fps
+    acquisition_fps = m_dict.get("camera_acquisition_fps")
+    if acquisition_fps is not None:
+        m_dict["camera_display_fps"] = acquisition_fps
+    else:
+        m_dict["camera_display_fps"] = loop_fps
+
+
 class capture_streamCV2:
     def __init__(self, srcCam=1, m_dict={}):
         print("CV-initialization...")
         self.m_dict = m_dict
         self.src = srcCam
         self.t0 = self.m_dict["t0"]
-        self.default_FPS = self.m_dict["camera_fps"]
-        self.resized_resolution = (
-            int(self.m_dict["camera_width"] * self.m_dict["camera_scale"]),
-            int(self.m_dict["camera_height"] * self.m_dict["camera_scale"]),
-        )
+        self.default_FPS = self.m_dict.get("camera_target_fps", self.m_dict["camera_fps"])
+        self.recording_resolution = _resolve_recording_resolution(self.m_dict)
+        self.processing_resolution = _resolve_processing_resolution(self.m_dict)
 
         self.frameBufLen = 200
         self.frameBuffer = np.zeros(
-            (self.resized_resolution[1], self.resized_resolution[0], self.frameBufLen),
+            (
+                self.processing_resolution[1],
+                self.processing_resolution[0],
+                self.frameBufLen,
+            ),
             dtype="uint8",
         )
-        self.fmt = cv2.VideoWriter_fourcc("D", "I", "V", "X")
+        self.fmt = _VIDEO_CODEC_CANDIDATES
         self.vwriter = None
         self.LogFile = None
         self.detectionlogfile = None
@@ -172,13 +264,16 @@ class capture_streamCV2:
         self.capture = cv2.VideoCapture(self.src + cv2.CAP_DSHOW)
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.m_dict["camera_width"])
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.m_dict["camera_height"])
-        print(self.m_dict["camera_fps"])
-        self.capture.set(cv2.CAP_PROP_FPS, self.m_dict["camera_fps"])
+        print(self.m_dict.get("camera_target_fps", self.m_dict["camera_fps"]))
+        self.capture.set(
+            cv2.CAP_PROP_FPS,
+            self.m_dict.get("camera_target_fps", self.m_dict["camera_fps"]),
+        )
         self.capture.set(cv2.CAP_PROP_SETTINGS, 1)
         self.capture.set(cv2.CAP_PROP_BUFFERSIZE, 2000)
         (status, frame) = self.capture.read()
         print(status)
-        halfImg = _resize_frame(frame, self.resized_resolution)
+        _resize_frame(frame, self.processing_resolution)
         print("CV-capture start success")
 
     def run(self):
@@ -206,13 +301,13 @@ class capture_streamCV2:
                 (status, frame) = self.capture.read()
                 t1 = time.perf_counter()
                 self.m_dict["total_time"] = t1 - self.m_dict["t0"]
-                halfImg = _resize_frame(frame, self.resized_resolution)
+                process_frame = _resize_frame(frame, self.processing_resolution)
 
                 if status:
                     if self.m_dict["camera_imshow"]:
-                        cv2.imshow("frame", halfImg)
+                        cv2.imshow("frame", process_frame)
                     if self.m_dict["stream"] & stream_flag:
-                        self.vwriter.write(halfImg)
+                        self.vwriter.write(frame)
                         "# Date, total time, Count, Speed, Position, Dark, Z-stage, di"
                         # self.currentLogFile.write(
                         #     str(now) + ", " + str(self.m_dict["total_time"]) + "\r"
@@ -229,12 +324,12 @@ class capture_streamCV2:
                     break
                 elif self.m_dict["quit"]:
                     break
-                self.m_dict["current_camera_frame"] = halfImg
+                self.m_dict["current_camera_frame"] = process_frame
             else:
                 t1 = time.perf_counter()
             # while (t1-t0) < 1/(self.default_FPS+1.0):
             #     t1 = time.perf_counter()
-            self.m_dict["camera_fps"] = int(1 / (t1 - t0))
+            _update_loop_fps(self.m_dict, t0, t1)
             t0 = t1 * 1
             if self.m_dict["quit"]:
                 break
@@ -282,18 +377,20 @@ class capture_streamPylon:
         self.m_dict = m_dict
         self.src = srcCam
         self.t0 = self.m_dict["t0"]
-        self.default_FPS = self.m_dict["camera_fps"]
-        self.resized_resolution = (
-            int(self.m_dict["camera_width"] * self.m_dict["camera_scale"]),
-            int(self.m_dict["camera_height"] * self.m_dict["camera_scale"]),
-        )
+        self.default_FPS = self.m_dict.get("camera_target_fps", self.m_dict["camera_fps"])
+        self.recording_resolution = _resolve_recording_resolution(self.m_dict)
+        self.processing_resolution = _resolve_processing_resolution(self.m_dict)
 
         self.frameBufLen = 200
         self.frameBuffer = np.zeros(
-            (self.resized_resolution[1], self.resized_resolution[0], self.frameBufLen),
+            (
+                self.processing_resolution[1],
+                self.processing_resolution[0],
+                self.frameBufLen,
+            ),
             dtype="uint8",
         )
-        self.fmt = cv2.VideoWriter_fourcc("D", "I", "V", "X")
+        self.fmt = _VIDEO_CODEC_CANDIDATES
         self.capture = None
         self.converter = None
         self.vwriter = None
@@ -350,16 +447,19 @@ class capture_streamPylon:
         pfs_path = os.path.abspath(os.path.expanduser(os.path.expandvars(pfs_path)))
         if not os.path.isfile(pfs_path):
             self.m_dict["camera_pfs_status"] = f".pfs not found: {pfs_path}"
-            raise FileNotFoundError(
-                f"Configured Basler .pfs file was not found: {pfs_path}"
+            self.m_dict["camera_pfs_last_loaded"] = ""
+            print(
+                f"Configured Basler .pfs file was not found, continuing without it: {pfs_path}"
             )
+            return
 
         feature_persistence = getattr(pylon, "FeaturePersistence", None)
         if feature_persistence is None:
             self.m_dict["camera_pfs_status"] = "pypylon FeaturePersistence unavailable"
-            raise RuntimeError(
-                "pypylon does not expose FeaturePersistence; cannot load Basler .pfs settings."
+            print(
+                "pypylon does not expose FeaturePersistence; continuing without Basler .pfs settings."
             )
+            return
 
         feature_persistence.Load(pfs_path, self.capture.GetNodeMap(), True)
         self.m_dict["camera_pfs_path"] = pfs_path
@@ -379,6 +479,7 @@ class capture_streamPylon:
                     continue
                 value = float(node.GetValue())
                 self.m_dict["camera_acquisition_fps"] = value
+                self.m_dict["camera_display_fps"] = value
                 return value, node_name
             except Exception:
                 continue
@@ -387,7 +488,9 @@ class capture_streamPylon:
         return None, None
 
     def _set_camera_frame_rate(self):
-        target_fps = float(self.m_dict["camera_fps"])
+        target_fps = float(
+            self.m_dict.get("camera_target_fps", self.m_dict["camera_fps"])
+        )
 
         try:
             rate_enable = getattr(self.capture, "AcquisitionFrameRateEnable", None)
@@ -409,7 +512,10 @@ class capture_streamPylon:
         return None
 
     def _apply_camera_geometry(self):
-        # Keep YORU's output resolution contract even if a .pfs changes sensor settings.
+        if not self.m_dict.get("camera_geometry_from_config", True):
+            return
+
+        # Keep YORU's output resolution contract when width/height are explicitly configured.
         try:
             self.capture.Width.SetValue(
                 min(self.capture.Width.Max, int(self.m_dict["camera_width"]))
@@ -466,14 +572,10 @@ class capture_streamPylon:
         frame_rate_node = self._set_camera_frame_rate()
 
         self._configure_converter()
-
-        self.capture.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
-        frame = self._grab_frame()
-        _resize_frame(frame, self.resized_resolution)
         if frame_rate_node is not None:
             print(
                 f"Basler frame-rate target requested via {frame_rate_node}: "
-                f"{float(self.m_dict['camera_fps']):.2f} fps"
+                f"{float(self.m_dict.get('camera_target_fps', self.m_dict['camera_fps'])):.2f} fps"
             )
         else:
             print("Basler frame-rate target could not be set from camera_fps")
@@ -490,6 +592,7 @@ class capture_streamPylon:
         self.startCapture()
         t0 = time.perf_counter()
         stream_flag = False
+        capture_flag = False
         self.frame_count = 0
         while True:
             now = datetime.datetime.now()
@@ -507,16 +610,25 @@ class capture_streamPylon:
 
             self._reload_pfs_if_requested()
 
+            should_capture = bool(self.m_dict.get("camera_preview", False) or stream_flag)
+            if should_capture and not capture_flag:
+                self.capture.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+                capture_flag = True
+            elif (not should_capture) and capture_flag:
+                if self.capture.IsGrabbing():
+                    self.capture.StopGrabbing()
+                capture_flag = False
+
             if self.capture is not None and self.capture.IsGrabbing():
                 frame = self._grab_frame()
                 t1 = time.perf_counter()
                 self.m_dict["total_time"] = t1 - self.m_dict["t0"]
-                halfImg = _resize_frame(frame, self.resized_resolution)
+                process_frame = _resize_frame(frame, self.processing_resolution)
 
                 if self.m_dict["camera_imshow"]:
-                    cv2.imshow("frame", halfImg)
+                    cv2.imshow("frame", process_frame)
                 if self.m_dict["stream"] & stream_flag:
-                    self.vwriter.write(halfImg)
+                    self.vwriter.write(frame)
                     self.log_writer.writerows(
                         [[self.frame_count, str(self.m_dict["total_time"])]]
                     )
@@ -528,11 +640,12 @@ class capture_streamPylon:
                     break
                 elif self.m_dict["quit"]:
                     break
-                self.m_dict["current_camera_frame"] = halfImg
+                self.m_dict["current_camera_frame"] = process_frame
             else:
                 t1 = time.perf_counter()
+                time.sleep(0.01)
 
-            self.m_dict["camera_fps"] = int(1 / (t1 - t0))
+            _update_loop_fps(self.m_dict, t0, t1)
             t0 = t1 * 1
             if self.m_dict["quit"]:
                 break
@@ -568,17 +681,19 @@ class capture_streamMSS:
 
         self.disp = m_dict["capture_area"]
         self.t0 = self.m_dict["t0"]
-        self.resized_resolution = (
-            int(self.m_dict["camera_width"] * self.m_dict["camera_scale"]),
-            int(self.m_dict["camera_height"] * self.m_dict["camera_scale"]),
-        )
+        self.recording_resolution = _resolve_recording_resolution(self.m_dict)
+        self.processing_resolution = _resolve_processing_resolution(self.m_dict)
 
         self.frameBufLen = 200
         self.frameBuffer = np.zeros(
-            (self.resized_resolution[1], self.resized_resolution[0], self.frameBufLen),
+            (
+                self.processing_resolution[1],
+                self.processing_resolution[0],
+                self.frameBufLen,
+            ),
             dtype="uint8",
         )
-        self.fmt = cv2.VideoWriter_fourcc("D", "I", "V", "X")
+        self.fmt = _VIDEO_CODEC_CANDIDATES
         self.vwriter = None
         self.LogFile = None
         self.detectionlogfile = None
@@ -587,7 +702,7 @@ class capture_streamMSS:
     def startCapture(self):
         self.src = mss.mss()
         frame = np.array(self.src.grab(self.disp))
-        halfImg = cv2.resize(frame, self.resized_resolution)
+        _resize_frame(frame, self.processing_resolution)
         print("CV-capture start success")
 
     def run(self):
@@ -612,16 +727,16 @@ class capture_streamMSS:
             # Ensure camera is connected
             if True:  # self.capture.isOpened():
                 # (status, frame) = mss.capture.read()
-                frame = np.array(self.src.grab(self.disp)) * 1
+                frame = _ensure_three_channel_bgr(np.array(self.src.grab(self.disp)) * 1)
                 t1 = time.perf_counter()
                 self.m_dict["total_time"] = t1 - self.m_dict["t0"]
-                halfImg = cv2.resize(frame, self.resized_resolution)
+                process_frame = _resize_frame(frame, self.processing_resolution)
 
                 if True:
                     if self.m_dict["camera_imshow"]:
-                        cv2.imshow("frame", halfImg)
+                        cv2.imshow("frame", process_frame)
                     if self.m_dict["stream"] & stream_flag:
-                        self.vwriter.write(halfImg)
+                        self.vwriter.write(frame)
                         "# Date, total time, Count, Speed, Position, Dark, Z-stage, di"
                         # self.currentLogFile.write(
                         #     str(now) + ", " + str(self.m_dict["total_time"]) + "\r"
@@ -639,12 +754,12 @@ class capture_streamMSS:
                     break
                 elif self.m_dict["quit"]:
                     break
-                self.m_dict["current_camera_frame"] = halfImg
+                self.m_dict["current_camera_frame"] = process_frame
             else:
                 t1 = time.perf_counter()
             while (t1 - t0) < 1 / 16:  # TODO
                 t1 = time.perf_counter()
-            self.m_dict["camera_fps"] = int(1 / (t1 - t0))
+            _update_loop_fps(self.m_dict, t0, t1)
             t0 = t1 * 1
 
             if self.m_dict["quit"]:

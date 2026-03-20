@@ -64,7 +64,10 @@ class camGUI:
         self.logo_img = cv2.imread(self.img_file_path)
         self.m_dict["yolo_detection_frame"] = cv2.resize(
             self.logo_img,
-            dsize=(self.m_dict["camera_width"], self.m_dict["camera_height"]),
+            dsize=(
+                int(self.m_dict["processing_width"]),
+                int(self.m_dict["processing_height"]),
+            ),
         )
 
         # COMリストの読み込み
@@ -77,6 +80,7 @@ class camGUI:
         data = np.flip(self.m_dict["current_camera_frame"], 2).ravel()
         data = np.asfarray(data, dtype="f")
         self.texture_data = np.true_divide(self.m_dict["current_camera_frame"], 255.0)
+        self.blank_frame = np.zeros_like(self.m_dict["current_camera_frame"])
 
     def startDPG(self):
         dpg.create_context()
@@ -134,6 +138,13 @@ class camGUI:
                 max_value=500,
                 tag="camFPS_bar",
             )
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Start Preview",
+                    tag="preview_btn",
+                    callback=lambda: self.toggle_preview(),
+                )
+                dpg.add_text(default_value="Preview stopped", tag="preview_status")
             dpg.add_text(default_value=" ")
             dpg.add_separator()
             with dpg.group(horizontal=True):
@@ -156,12 +167,13 @@ class camGUI:
                     tag="fileName",
                 )
                 dpg.add_text(default_value=".avi")
-            dpg.add_checkbox(
-                label="streaming data",
-                default_value=False,
-                tag="streamingChkBox",
-                callback=lambda: self.logging(),
-            )
+            with dpg.group(horizontal=True):
+                dpg.add_button(
+                    label="Start Recording",
+                    tag="record_btn",
+                    callback=lambda: self.toggle_recording(),
+                )
+                dpg.add_text(default_value="Recording stopped", tag="record_status")
             dpg.add_separator()
             dpg.add_button(
                 label="Quit",
@@ -207,6 +219,7 @@ class camGUI:
                 default_value=False,
                 tag="yolocheckbox",
                 callback=lambda: self.yolo_condition(),
+                enabled=True,
             )
             if self.is_pypylon_backend:
                 dpg.add_separator()
@@ -246,6 +259,7 @@ class camGUI:
                     default_value=self.m_dict["trigger_class"],
                     width=150,
                     callback=lambda: self.list_of_class(),
+                    enabled=True,
                 )
                 dpg.add_button(
                     label="YOLO model class load",
@@ -260,6 +274,7 @@ class camGUI:
                     default_value=self.m_dict["arduino_com"],
                     width=100,
                     callback=lambda: self.list_in_com(),
+                    enabled=True,
                 )
                 dpg.add_button(
                     label="COM list load",
@@ -273,6 +288,7 @@ class camGUI:
                     width=100,
                     hint="integer only",
                     callback=lambda: self.pin_input(),
+                    enabled=True,
                 )
             with dpg.group(horizontal=True):
                 dpg.add_text(label="title", default_value="Trigger Plugin:")
@@ -282,12 +298,14 @@ class camGUI:
                     default_value=self.m_dict["in_plugin_name"],
                     width=150,
                     callback=lambda: self.list_in_plugin(),
+                    enabled=True,
                 )
             dpg.add_checkbox(
                 label="Trigger condition",
                 default_value=False,
                 tag="trigger_checkbox",
                 callback=lambda: self.trigger_condition(),
+                enabled=True,
             )
 
         dpg.setup_dearpygui()
@@ -300,7 +318,14 @@ class camGUI:
         # Image
         if self.conf["hardware"]["use_camera"]:
             dpg.set_value("imwin_tag0", self.frame_to_data())
-            dpg.set_value("camFPS_bar", self.m_dict["camera_fps"])
+            dpg.set_value(
+                "camFPS_bar",
+                float(
+                    self.m_dict.get(
+                        "camera_display_fps", self.m_dict.get("camera_fps", 0)
+                    )
+                ),
+            )
 
             # YOLO detection
             dpg.set_value("imwin_tag1", self.yolo_frame_to_data())
@@ -309,11 +334,26 @@ class camGUI:
                     "camera_pfs_status",
                     self.m_dict.get("camera_pfs_status", "No .pfs file selected"),
                 )
+        if dpg.does_item_exist("preview_status"):
+            dpg.set_value(
+                "preview_status",
+                "Preview running"
+                if self.m_dict.get("camera_preview", False)
+                else "Preview stopped",
+            )
+        if dpg.does_item_exist("record_status"):
+            dpg.set_value(
+                "record_status",
+                "Recording active" if self.m_dict.get("stream", False) else "Recording stopped",
+            )
 
     def frame_to_data(self):
         # raw image streaming
+        frame = self.blank_frame
+        if self.m_dict.get("camera_preview", False):
+            frame = self.m_dict["current_camera_frame"]
         data = np.true_divide(
-            cv2.cvtColor(self.m_dict["current_camera_frame"], cv2.COLOR_BGR2RGBA), 255
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), 255
         )
         # print("a")
         # cv2.imshow("camera", data)
@@ -329,9 +369,11 @@ class camGUI:
         # self.texture_data_2 = np.true_divide(self.m_dict["yolo_detection_frame"], 255.0)
         # data_yolo = np.asfarray(self.texture_data_2.ravel(), dtype="f")
         # data_yolo = np.asfarray(self.m_dict["yolo_detection_frame"].ravel(), dtype="f")
-        data_yolo = np.true_divide(
-            cv2.cvtColor(self.m_dict["yolo_detection_frame"], cv2.COLOR_BGR2RGBA), 255
-        )
+        frame = self.blank_frame
+        if self.m_dict.get("camera_preview", False):
+            frame = self.m_dict["yolo_detection_frame"]
+
+        data_yolo = np.true_divide(cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA), 255)
         # cv2.imshow("camera2", data_yolo)
         # cv2.imshow("camera3", self.m_dict["yolo_detection_frame"])
         return data_yolo
@@ -402,6 +444,71 @@ class camGUI:
         tf = dpg.get_value("trigger_checkbox")
         self.m_dict["Trigger"] = tf
 
+    def toggle_preview(self):
+        if self.m_dict.get("stream", False):
+            self.m_dict["camera_preview"] = True
+            if dpg.does_item_exist("preview_btn"):
+                dpg.configure_item("preview_btn", label="Stop Preview")
+            return
+
+        preview_state = not bool(self.m_dict.get("camera_preview", False))
+        self.m_dict["camera_preview"] = preview_state
+        if dpg.does_item_exist("preview_btn"):
+            dpg.configure_item(
+                "preview_btn",
+                label="Stop Preview" if preview_state else "Start Preview",
+            )
+
+    def toggle_recording(self):
+        recording_state = not bool(self.m_dict.get("stream", False))
+        if recording_state:
+            export_dir = str(self.m_dict.get("export", "")).strip()
+            if not export_dir:
+                print("Recording export folder is not set. Select a folder before starting recording.")
+                return
+
+            export_dir = os.path.abspath(
+                os.path.expanduser(os.path.expandvars(export_dir))
+            )
+            os.makedirs(export_dir, exist_ok=True)
+            self.m_dict["export"] = export_dir
+            dpg.set_value("export_dir_path", export_dir)
+
+            dt = datetime.datetime.now()
+            fnhead = dpg.get_value("fileName")
+            self.currentLogFileName = fnhead + dt.strftime("%Y%m%d-%H%M%S_%f")
+            self.m_dict["curLog"] = self.currentLogFileName
+            self.m_dict["_preview_state_before_record"] = bool(
+                self.m_dict.get("camera_preview", False)
+            )
+            self.m_dict["camera_preview"] = True
+            if dpg.does_item_exist("preview_btn"):
+                dpg.configure_item("preview_btn", label="Stop Preview")
+        else:
+            export_dir = str(self.m_dict.get("export", "")).strip()
+            if export_dir and hasattr(self, "currentLogFileName"):
+                shutil.copyfile(
+                    self.config_name,
+                    os.path.join(export_dir, self.currentLogFileName + ".yaml"),
+                )
+            self.m_dict["camera_preview"] = bool(
+                self.m_dict.get("_preview_state_before_record", False)
+            )
+            if dpg.does_item_exist("preview_btn"):
+                dpg.configure_item(
+                    "preview_btn",
+                    label="Stop Preview"
+                    if self.m_dict.get("camera_preview", False)
+                    else "Start Preview",
+                )
+
+        self.m_dict["stream"] = recording_state
+        if dpg.does_item_exist("record_btn"):
+            dpg.configure_item(
+                "record_btn",
+                label="Stop Recording" if recording_state else "Start Recording",
+            )
+
     def load_yolo_class(self):
         self.class_list = self.m_dict["class_name_list"]
         self.class_list.append("None")
@@ -438,47 +545,6 @@ class camGUI:
         tf = dpg.get_value("class_list")
         self.m_dict["trigger_class"] = tf
 
-    def logging(self):
-        tf = dpg.get_value("streamingChkBox")
-        if tf:  # streaming start
-            export_dir = str(self.m_dict.get("export", "")).strip()
-            if not export_dir:
-                print("Recording export folder is not set. Select a folder before enabling streaming.")
-                dpg.set_value("streamingChkBox", False)
-                self.m_dict["stream"] = False
-                return
-
-            export_dir = os.path.abspath(
-                os.path.expanduser(os.path.expandvars(export_dir))
-            )
-            os.makedirs(export_dir, exist_ok=True)
-            self.m_dict["export"] = export_dir
-            dpg.set_value("export_dir_path", export_dir)
-
-            dt = datetime.datetime.now()
-            fnhead = dpg.get_value("fileName")
-            self.currentLogFileName = fnhead + dt.strftime("%Y%m%d-%H%M%S_%f")
-            # self.currentLogFile = open(
-            #     self.m_dict["export"] + "/" + self.currentLogFileName, "a+"
-            # )
-            # self.currentLogFile.write("# Streaming start: " + str(dt) + "\r")
-            # self.currentLogFile.write(
-            #     "# Date, total time, Count, Speed, Track, Position, Dark, Z-stage, Gain_d, di0, di1, di2, di3, "
-            #     + "\r"
-            # )
-            self.m_dict["curLog"] = self.currentLogFileName
-            self.m_dict["stream"] = tf
-        else:
-            self.m_dict["stream"] = tf
-            export_dir = str(self.m_dict.get("export", "")).strip()
-            if export_dir and hasattr(self, "currentLogFileName"):
-                ret = shutil.copyfile(
-                    self.config_name,
-                    os.path.join(export_dir, self.currentLogFileName + ".yaml"),
-                )
-            # print("Saved config: ", ret)
-            # self.currentLogFile.close()
-
     def __del__(self):
         if hasattr(self, "quit"):
             self.m_dict["quit"] = True
@@ -512,32 +578,29 @@ def main(confFileName):
                 imgWin = capture_streamCV2(srcCam=d["camera_id"], m_dict=d)
 
         gui = camGUI(config_file=confFileName, m_dict=d)
-        yolo_det = yolo_detection(m_dict=d)
-        yolo_draw = yolo_drawing(m_dict=d)
-        yolo_tri = yolo_trigger(m_dict=d)
-        gui = camGUI(config_file=confFileName, m_dict=d)
 
         d["camera_imshow"] = False
 
-        process_pool = []
-
         prc_imager = Process(target=imgWin.run)
         prc_gui = Process(target=gui.run)
-        prc_yolo = Process(target=yolo_det.detect, args=(d,))
-        prc_yolo_draw = Process(target=yolo_draw.YOLOdraw, args=(d,))
-        prc_tri = Process(target=yolo_tri.init_trigger)
+        yolo_det = yolo_detection(m_dict=d)
+        yolo_draw = yolo_drawing(m_dict=d)
+        yolo_tri = yolo_trigger(m_dict=d)
+        worker_processes = [
+            Process(target=yolo_det.detect, args=(d,)),
+            Process(target=yolo_draw.YOLOdraw, args=(d,)),
+            Process(target=yolo_tri.init_trigger),
+        ]
 
         prc_gui.start()
         prc_imager.start()
-        prc_yolo.start()
-        prc_yolo_draw.start()
-        prc_tri.start()
+        for process in worker_processes:
+            process.start()
 
         prc_gui.join()
         prc_imager.join()
-        prc_yolo.join()
-        prc_yolo_draw.join()
-        prc_tri.join()
+        for process in worker_processes:
+            process.join()
 
         print(d)
 

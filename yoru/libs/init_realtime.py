@@ -1,4 +1,5 @@
 import datetime
+import os
 import re
 import sys
 import time
@@ -13,6 +14,102 @@ from yoru.libs.util import loadingParam
 #     from yoru.libs.util import loadingParam
 # except ModuleNotFoundError:
 #     from libs.util import loadingParam
+
+
+def _compute_processing_resolution(width, height, scale):
+    width = max(1, int(width))
+    height = max(1, int(height))
+    try:
+        scale = float(scale)
+    except (TypeError, ValueError):
+        scale = 1.0
+
+    if scale <= 1.0:
+        return (width, height)
+
+    return (
+        max(1, int(round(width / scale))),
+        max(1, int(round(height / scale))),
+    )
+
+
+def _coerce_optional_int(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_pfs_resolution(pfs_path):
+    if not pfs_path:
+        return None
+
+    pfs_path = os.path.abspath(os.path.expanduser(os.path.expandvars(str(pfs_path))))
+    if not os.path.isfile(pfs_path):
+        return None
+
+    width = None
+    height = None
+    try:
+        with open(pfs_path, "r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                if width is None:
+                    match = re.match(r"^Width\s+(\d+)\s*$", line)
+                    if match:
+                        width = int(match.group(1))
+                        continue
+                if height is None:
+                    match = re.match(r"^Height\s+(\d+)\s*$", line)
+                    if match:
+                        height = int(match.group(1))
+                        continue
+                if width is not None and height is not None:
+                    return width, height
+    except OSError:
+        return None
+
+    if width is not None and height is not None:
+        return width, height
+    return None
+
+
+def _has_explicit_geometry(hardware_conf):
+    return (
+        _coerce_optional_int(hardware_conf.get("camera_width")) is not None
+        and _coerce_optional_int(hardware_conf.get("camera_height")) is not None
+    )
+
+
+def _resolve_recording_resolution(hardware_conf):
+    width = _coerce_optional_int(hardware_conf.get("recording_width"))
+    height = _coerce_optional_int(hardware_conf.get("recording_height"))
+    if width is not None and height is not None:
+        return max(1, width), max(1, height)
+
+    width = _coerce_optional_int(hardware_conf.get("camera_width"))
+    height = _coerce_optional_int(hardware_conf.get("camera_height"))
+    if width is not None and height is not None:
+        return max(1, width), max(1, height)
+
+    pfs_resolution = _read_pfs_resolution(hardware_conf.get("camera_pfs_path", ""))
+    if pfs_resolution is not None:
+        return pfs_resolution
+
+    return 640, 480
+
+
+def _resolve_processing_resolution(hardware_conf):
+    recording_width, recording_height = _resolve_recording_resolution(hardware_conf)
+    processing_width = hardware_conf.get("processing_width")
+    processing_height = hardware_conf.get("processing_height")
+
+    if processing_width is not None and processing_height is not None:
+        return max(1, int(processing_width)), max(1, int(processing_height))
+
+    scale = hardware_conf.get("camera_scale", 1)
+    return _compute_processing_resolution(recording_width, recording_height, scale)
 
 
 class init_asovi:
@@ -34,6 +131,7 @@ class init_asovi:
 
         # camera or screencapture
         self.m_dict["stream_MSS"] = self.conf["capture_style"]["stream_MSS"]
+        self.m_dict["camera_preview"] = False
 
         # - Camera:
         self.m_dict["camera_backend"] = self.conf["hardware"].get(
@@ -47,34 +145,42 @@ class init_asovi:
         self.m_dict["camera_pfs_status"] = "No .pfs file selected"
         self.m_dict["camera_pfs_last_loaded"] = ""
         self.m_dict["camera_id"] = self.conf["hardware"]["camera_id"]
-        self.m_dict["camera_width"] = self.conf["hardware"]["camera_width"]
-        self.m_dict["camera_height"] = self.conf["hardware"]["camera_height"]
-        self.m_dict["camera_scale"] = self.conf["hardware"]["camera_scale"]
+        self.m_dict["camera_geometry_from_config"] = _has_explicit_geometry(
+            self.conf["hardware"]
+        )
+        recording_width, recording_height = _resolve_recording_resolution(
+            self.conf["hardware"]
+        )
+        processing_width, processing_height = _resolve_processing_resolution(
+            self.conf["hardware"]
+        )
+
+        self.m_dict["camera_width"] = recording_width
+        self.m_dict["camera_height"] = recording_height
+        self.m_dict["recording_width"] = recording_width
+        self.m_dict["recording_height"] = recording_height
+        self.m_dict["camera_scale"] = self.conf["hardware"].get("camera_scale", 1)
         self.m_dict["camera_fps"] = self.conf["hardware"]["camera_fps"]
+        self.m_dict["camera_target_fps"] = float(self.conf["hardware"]["camera_fps"])
+        self.m_dict["camera_loop_fps"] = 0.0
+        self.m_dict["camera_display_fps"] = float(self.conf["hardware"]["camera_fps"])
+        self.m_dict["camera_acquisition_fps"] = float(
+            self.conf["hardware"]["camera_fps"]
+        )
+        self.m_dict["processing_width"] = processing_width
+        self.m_dict["processing_height"] = processing_height
         self.m_dict["current_camera_frame"] = np.zeros(
             (
-                int(
-                    self.conf["hardware"]["camera_height"]
-                    * self.conf["hardware"]["camera_scale"]
-                ),
-                int(
-                    self.conf["hardware"]["camera_width"]
-                    * self.conf["hardware"]["camera_scale"]
-                ),
+                processing_height,
+                processing_width,
                 3,
             ),
             dtype="uint8",
         )
         self.m_dict["yolo_detection_frame"] = np.zeros(
             (
-                int(
-                    self.conf["hardware"]["camera_height"]
-                    * self.conf["hardware"]["camera_scale"]
-                ),
-                int(
-                    self.conf["hardware"]["camera_width"]
-                    * self.conf["hardware"]["camera_scale"]
-                ),
+                processing_height,
+                processing_width,
                 3,
             ),
             dtype="uint8",

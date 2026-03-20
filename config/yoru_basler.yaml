@@ -28,10 +28,8 @@ hardware:
   use_camera: True
   camera_backend: pypylon      # Use Basler pypylon camera
   camera_serial: ""           # Leave empty for auto-detect
-  camera_pfs_path: "C:\\Users\\Cornell\\Documents\\Basler_camera_settings\\acA1920-155um_25372612_40Hz_gain10_gamma0.5.pfs"         # Optional .pfs file exported from pylon Viewer
+  camera_pfs_path: "./test_camera/Camera_setting_40Hz.pfs"         # Optional .pfs file exported from pylon Viewer
   camera_id: 0                  # Camera index (0 = first camera)
-  camera_width: 1200             # Resolution width
-  camera_height: 1200            # Resolution height
   camera_scale: 2               # Downscale factor (1.0 = no scaling)
   camera_fps: 40                # Frames per second
   camera_imshow: True           # Show live camera feed in window
