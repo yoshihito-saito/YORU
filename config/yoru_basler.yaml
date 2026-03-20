@@ -30,9 +30,9 @@ hardware:
   camera_serial: ""           # Leave empty for auto-detect
   camera_pfs_path: ""         # Optional .pfs file exported from pylon Viewer
   camera_id: 0                  # Camera index (0 = first camera)
-  camera_width: 680             # Resolution width
-  camera_height: 480            # Resolution height
-  camera_scale: 1               # Downscale factor (1.0 = no scaling)
+  camera_width: 1280             # Resolution width
+  camera_height: 1024            # Resolution height
+  camera_scale: 2               # Downscale factor (1.0 = no scaling)
   camera_fps: 40                # Frames per second
   camera_imshow: True           # Show live camera feed in window
 
