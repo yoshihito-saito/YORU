@@ -20,7 +20,7 @@ Because of that, the safest workflow is to keep `.pfs` and YAML aligned.
 Use either of these:
 
 ```powershell
-python -m yoru.realtime_yoru_GUI --config config/yoru_pypylon_test.yaml
+python -m yoru.realtime_yoru_GUI --config config/yoru_basler.yaml
 ```
 
 or on Windows:
