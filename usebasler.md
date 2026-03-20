@@ -101,29 +101,6 @@ Recommended workflow:
 
 This is recommended because the current code loads `.pfs` first, then still applies YAML-side width, height, and fps.
 
-## If You Do Not Want Downsize
-
-Use:
-
-- `camera_scale: 1`
-- `camera_width` equal to the actual Basler output width
-- `camera_height` equal to the actual Basler output height
-
-In that case, YORU still calls `cv2.resize(...)`, but it is effectively a same-size resize.
-
-## Does YORU Crop Again?
-
-Not in the software-processing step.
-
-What happens is:
-
-1. Basler camera settings are loaded
-2. YORU may try to set camera width/height on the camera side
-3. The grabbed image is resized in software
-
-So YORU is not doing an extra software crop after acquisition.  
-The main YORU-side image operation is resize, not crop.
-
 ## GUI Support For `.pfs`
 
 When using the `pypylon` backend, the GUI shows Basler-only controls:
@@ -147,7 +124,7 @@ Important points:
 
 ## About Frame Drops
 
-The biggest risk is dropped frames, not duplicate saves.
+The biggest risk is dropped frames.
 
 Current Basler grabbing uses `GrabStrategy_LatestImageOnly`, so if the software cannot keep up, older frames may be skipped.
 
@@ -157,20 +134,4 @@ For many realtime experiments, a practical check is:
 - saved frame count in the video
 
 If those match for the same recording period, that is usually a good sign that frame drops did not occur.
-
-## Practical Recommendation
-
-For stable use, keep the following aligned:
-
-- Basler `.pfs`
-- `camera_width`
-- `camera_height`
-- `camera_fps`
-- `camera_scale`
-
-Suggested rule:
-
-- Let `.pfs` define the real camera behavior
-- Let YAML explicitly mirror those values for YORU
-- Use `camera_scale: 1` unless you intentionally want smaller frames for speed
 
